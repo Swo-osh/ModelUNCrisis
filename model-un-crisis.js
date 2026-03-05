@@ -19,13 +19,144 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db  = getDatabase(app);
 
-// ── Session identity ────────────────────────────────────────
-const CALL_SIGNS = ['NIGHTWATCH','FOXGLOVE','CRIMSON','FALCON','MAGPIE','NIGHTINGALE','SUNRAY','KESTREL','WYVERN','BASILISK','SPECTRE','RAVEN','IRONSIDE','TEMPEST','COBALT','ARGENT','PHANTOM'];
-const myCallSign = CALL_SIGNS[Math.floor(Math.random()*CALL_SIGNS.length)]+'-'+Math.floor(Math.random()*90+10);
-const presKey = myCallSign.replace('-','_');
-const myPresRef = ref(db, `presence/${presKey}`);
-set(myPresRef, { callSign: myCallSign, ts: Date.now() });
-onDisconnect(myPresRef).remove();
+// ═══════════════════════════════════════════════════════════
+// LOGIN & SESSION IDENTITY
+// ═══════════════════════════════════════════════════════════
+const CD_PASSWORD = 'enters';
+let myCallSign = '';
+let isCD = false;
+let presKey = '';
+let myPresRef = null;
+
+function loadSession() {
+  const saved = localStorage.getItem('warroom_session');
+  if (saved) {
+    try {
+      const s = JSON.parse(saved);
+      if (s.callSign) {
+        myCallSign = s.callSign;
+        isCD = s.isCD || false;
+        return true;
+      }
+    } catch(e) {}
+  }
+  return false;
+}
+
+function saveSession(callSign, cd) {
+  localStorage.setItem('warroom_session', JSON.stringify({ callSign, isCD: cd }));
+}
+
+function clearSession() {
+  localStorage.removeItem('warroom_session');
+}
+
+function showLoginModal() {
+  // Detach old presence
+  if (myPresRef) { remove(myPresRef); myPresRef = null; }
+  document.getElementById('login-overlay').classList.remove('hidden');
+  document.getElementById('login-select').value = '';
+  document.getElementById('login-password-wrap').style.display = 'none';
+  document.getElementById('login-error').style.display = 'none';
+  document.getElementById('login-btn').classList.remove('cd-mode');
+  document.getElementById('login-btn').textContent = '[ AUTHENTICATE ]';
+}
+window.showLoginModal = showLoginModal;
+
+function attemptLogin() {
+  const sel = document.getElementById('login-select').value;
+  if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
+
+  if (sel === 'CD') {
+    const pw = document.getElementById('login-password').value;
+    if (pw !== CD_PASSWORD) {
+      shakeLoginError('✕ AUTHORIZATION FAILED — INCORRECT CODE');
+      document.getElementById('login-password').value = '';
+      document.getElementById('login-password').focus();
+      return;
+    }
+    completeLogin(sel, true);
+  } else {
+    completeLogin(sel, false);
+  }
+}
+window.attemptLogin = attemptLogin;
+
+function shakeLoginError(msg) {
+  const err = document.getElementById('login-error');
+  err.textContent = msg;
+  err.style.display = 'block';
+  err.style.animation = 'none';
+  requestAnimationFrame(() => { err.style.animation = 'blink 0.6s step-end 3'; });
+}
+
+function completeLogin(callSign, cd) {
+  myCallSign = callSign;
+  isCD = cd;
+  saveSession(callSign, cd);
+
+  // Register presence
+  presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
+  myPresRef = ref(db, `presence/${presKey}`);
+  set(myPresRef, { callSign: myCallSign, isCD, ts: Date.now() });
+  onDisconnect(myPresRef).remove();
+
+  // Hide login
+  document.getElementById('login-overlay').classList.add('hidden');
+
+  // Apply permissions
+  applyPermissions();
+
+  // Update UI labels
+  setCallSignLabel();
+  setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
+}
+
+function applyPermissions() {
+  // Editor bar — only CD can add/move/delete cities
+  const editorBtns = document.querySelectorAll('#btn-add, #btn-move, #btn-delete');
+  editorBtns.forEach(btn => {
+    if (isCD) {
+      btn.style.display = '';
+      btn.style.opacity = '1';
+      btn.style.pointerEvents = '';
+    } else {
+      btn.style.display = 'none';
+    }
+  });
+
+  // Show/hide CD delete buttons on existing crisis items and log entries
+  document.querySelectorAll('.cd-delete-crisis, .cd-delete-log').forEach(el => {
+    el.style.display = isCD ? 'inline' : 'none';
+  });
+
+  // If not CD, ensure we're in view mode
+  if (!isCD && mode !== 'view') setMode('view');
+}
+
+// ── Handle select change to show/hide password field ──────
+document.getElementById('login-select').addEventListener('change', function() {
+  const wrap = document.getElementById('login-password-wrap');
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-error');
+  err.style.display = 'none';
+  if (this.value === 'CD') {
+    wrap.style.display = 'block';
+    btn.classList.add('cd-mode');
+    btn.textContent = '[ REQUEST ACCESS ]';
+    setTimeout(() => document.getElementById('login-password').focus(), 50);
+  } else {
+    wrap.style.display = 'none';
+    btn.classList.remove('cd-mode');
+    btn.textContent = '[ AUTHENTICATE ]';
+  }
+});
+
+document.getElementById('login-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') attemptLogin();
+});
+
+
 
 // ── Local state ─────────────────────────────────────────────
 let cities = {};
@@ -147,6 +278,7 @@ function renderCrisisFeed(data){
         <span class="crisis-priority ${c.pri}">${c.pri}</span>
         <span class="crisis-location">${c.loc}</span>
         ${c.postedBy&&c.postedBy!=='SYSTEM'?`<span style="font-size:8px;color:rgba(0,255,65,0.4);margin-left:auto;">[${c.postedBy}]</span>`:''}
+        <button class="cd-delete-crisis" style="display:${isCD?'inline':'none'}" data-id="${c.id}" onclick="cdDeleteCrisis(event,'${c.id}')">✕ DELETE</button>
       </div>
       <div class="crisis-title">${c.title}</div>
       <div class="crisis-body">${(c.body||'').split('\n')[0].substring(0,120)}</div>`;
@@ -170,15 +302,16 @@ onValue(intelRef,snap=>{
   const logEl=document.getElementById('intel-log');
   if(!logEl) return;
   const entries=snap.val()||{};
-  const sorted=Object.values(entries).sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,25);
+  const sorted=Object.entries(entries).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,25);
   logEl.innerHTML='';
-  sorted.forEach(e=>{
+  sorted.forEach(([key,e])=>{
     const div=document.createElement('div');
     div.className='log-entry'+(e.isUser?' new':'');
     const col=e.isUser?'var(--amber)':'rgba(0,255,65,0.38)';
     div.innerHTML=`<span class="timestamp" style="color:${col}">[${e.ts_str||'--:--:--'}]</span> `+
       (e.callSign?`<span style="color:${col};font-size:8px;">${e.callSign}:</span> `:'')+
-      `<span class="msg">${e.msg}</span>`;
+      `<span class="msg">${e.msg}</span>`+
+      `<button class="cd-delete-log" style="display:${isCD?'inline':'none'}" onclick="cdDeleteLog('${key}')">✕</button>`;
     logEl.appendChild(div);
   });
 });
@@ -223,6 +356,8 @@ onValue(ref(db,'presence'),snap=>{
 // MODE CONTROLS
 // ═══════════════════════════════════════════════════════════
 function setMode(m){
+  // Non-CD agents can only be in view mode
+  if (!isCD && m !== 'view') return;
   mode=m;
   document.getElementById('mode-label').textContent=
     m==='add'?'MODE: ADD — TAP MAP TO PLACE':
@@ -363,7 +498,14 @@ function closeModalNow(){document.getElementById('modal-overlay').classList.remo
 window.closeModalNow=closeModalNow;
 
 // Dispatch panel
-function openDispatchPanel(){ document.getElementById('dispatch-panel').classList.add('active'); }
+const radioSfx = new Audio('radio.mp3');
+radioSfx.volume = 0.8;
+
+function openDispatchPanel(){
+  radioSfx.currentTime = 0;
+  radioSfx.play().catch(()=>{});
+  document.getElementById('dispatch-panel').classList.add('active');
+}
 window.openDispatchPanel=openDispatchPanel;
 function closeDispatchPanel(){ document.getElementById('dispatch-panel').classList.remove('active'); }
 window.closeDispatchPanel=closeDispatchPanel;
@@ -411,7 +553,23 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
 });
 
-// Default crises
+// CD-only: delete crisis
+function cdDeleteCrisis(event, id) {
+  event.stopPropagation();
+  if (!isCD) return;
+  remove(ref(db, `crises/${id}`));
+  fbPostLog(`CD removed crisis dispatch [${id}]`, false);
+}
+window.cdDeleteCrisis = cdDeleteCrisis;
+
+// CD-only: delete log entry
+function cdDeleteLog(key) {
+  if (!isCD) return;
+  remove(ref(db, `intelLog/${key}`));
+}
+window.cdDeleteLog = cdDeleteLog;
+
+
 const CRISES=[
   {title:'EASTERN FLANK INCURSION — ARMORED COLUMN SIGHTED',loc:'BERLIN',pri:'HIGH',time:'04:17 GMT',clr:'OPERATIVE',body:`INTELLIGENCE REPORT — PRIORITY ALPHA\n────────────────────────────────────────\n\nStation NIGHTWATCH confirmed mechanized column of ~40 armored vehicles crossed demarcation line at NOVEMBER-7-ECHO, 03:51 GMT.\n\nCombined-arms assessment: armor, infantry, towed artillery. Material breach of Krakow Provisional Agreement.\n\nRECOMMENDED ACTION: Convene emergency session. Issue condemnation. Activate Article IV.`},
   {title:'DIPLOMATIC CIPHER INTERCEPTED — INTENT UNCLEAR',loc:'MOSCOW',pri:'HIGH',time:'03:52 GMT',clr:'DIRECTOR',body:`SIGNALS INTELLIGENCE — COMPARTMENTALIZED\n────────────────────────────────────────\n\nStation FOXGLOVE: partial intercept 03:22 GMT, DELTA-9. Unknown cypher variant. Decode: 47%.\n\nRECOMMENDED ACTION: Elevated readiness. Full decode: 90 min.`},
@@ -424,7 +582,25 @@ const CRISES=[
 window.addEventListener('resize',renderAll);
 setTimeout(renderAll,100);
 setTimeout(renderAll,700);
-setTimeout(()=>fbPostLog(`Agent ${myCallSign} connected to secure channel.`,false),1500);
+
+// ═══════════════════════════════════════════════════════════
+// BOOT — check saved session or show login
+// ═══════════════════════════════════════════════════════════
+if (loadSession()) {
+  // Restore session
+  document.getElementById('login-overlay').classList.add('hidden');
+  presKey = myCallSign.replace(/[^a-zA-Z0-9]/g, '_');
+  myPresRef = ref(db, `presence/${presKey}`);
+  set(myPresRef, { callSign: myCallSign, isCD, ts: Date.now() });
+  onDisconnect(myPresRef).remove();
+  applyPermissions();
+  setCallSignLabel();
+  setTimeout(() => fbPostLog(`Agent ${myCallSign} reconnected to secure channel.`, false), 1500);
+} else {
+  // Show login — page is blocked until login completes
+  // login-overlay is visible by default (no hidden class)
+}
+
 
 // Update dispatch panel callsign label when DOM is ready
 function setCallSignLabel() {
