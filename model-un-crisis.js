@@ -67,18 +67,17 @@ function attemptLogin() {
   const sel = document.getElementById('login-select').value;
   if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
 
-  if (sel === 'CD') {
-    const pw = document.getElementById('login-password').value;
-    if (pw !== CD_PASSWORD) {
-      shakeLoginError('✕ AUTHORIZATION FAILED — INCORRECT CODE');
-      document.getElementById('login-password').value = '';
-      document.getElementById('login-password').focus();
-      return;
-    }
-    completeLogin(sel, true);
-  } else {
-    completeLogin(sel, false);
+  const pw = document.getElementById('login-password').value;
+  const expected = sel === 'CD' ? CD_PASSWORD : sel.toLowerCase();
+
+  if (pw !== expected) {
+    shakeLoginError('✕ AUTHORIZATION FAILED — INCORRECT CODE');
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-password').focus();
+    return;
   }
+
+  completeLogin(sel, sel === 'CD');
 }
 window.attemptLogin = attemptLogin;
 
@@ -113,6 +112,8 @@ function completeLogin(callSign, cd) {
 }
 
 function applyPermissions() {
+  const badge = document.getElementById('agent-badge');
+  if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : `⬡ ${myCallSign}`;
   // Editor bar — only CD can add/move/delete cities
   const editorBtns = document.querySelectorAll('#btn-add, #btn-move, #btn-delete');
   editorBtns.forEach(btn => {
@@ -137,19 +138,22 @@ function applyPermissions() {
 // ── Handle select change to show/hide password field ──────
 document.getElementById('login-select').addEventListener('change', function() {
   const wrap = document.getElementById('login-password-wrap');
+  const label = document.getElementById('login-password-label');
   const btn = document.getElementById('login-btn');
   const err = document.getElementById('login-error');
   err.style.display = 'none';
+  document.getElementById('login-password').value = '';
+  wrap.style.display = this.value ? 'block' : 'none';
   if (this.value === 'CD') {
-    wrap.style.display = 'block';
+    label.textContent = '⚠ CD AUTHORIZATION CODE REQUIRED';
     btn.classList.add('cd-mode');
     btn.textContent = '[ REQUEST ACCESS ]';
-    setTimeout(() => document.getElementById('login-password').focus(), 50);
-  } else {
-    wrap.style.display = 'none';
+  } else if (this.value) {
+    label.textContent = 'AGENT ACCESS CODE';
     btn.classList.remove('cd-mode');
     btn.textContent = '[ AUTHENTICATE ]';
   }
+  if (this.value) setTimeout(() => document.getElementById('login-password').focus(), 50);
 });
 
 document.getElementById('login-password').addEventListener('keydown', e => {
