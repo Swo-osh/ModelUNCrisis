@@ -370,13 +370,13 @@
 
   /* CD admin controls */
   .cd-delete-crisis {
-    display:none; background:none; border:none; color:rgba(255,34,0,0.5);
+    background:none; border:none; color:rgba(255,34,0,0.5);
     font-family:'Share Tech Mono',monospace; font-size:8px; letter-spacing:1px;
     cursor:pointer; padding:2px 6px; margin-left:4px; transition:all 0.15s;
   }
   .cd-delete-crisis:hover { color:var(--red-alert); text-shadow:0 0 6px var(--red-alert); }
   .cd-delete-log {
-    display:none; background:none; border:none; color:rgba(255,34,0,0.4);
+    background:none; border:none; color:rgba(255,34,0,0.4);
     font-family:'Share Tech Mono',monospace; font-size:7px; cursor:pointer;
     padding:0 4px; transition:all 0.15s; vertical-align:middle;
   }
@@ -467,6 +467,7 @@
     <div class="clock-block">
       <div id="clock">00:00:00</div>
       <div class="date-line" id="dateline">LOADING...</div>
+      <div id="agent-badge" style="margin-top:6px;font-size:9px;letter-spacing:2px;color:var(--radar-green);text-align:right;"></div>
     </div>
   </div>
 
