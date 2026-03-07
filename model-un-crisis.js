@@ -25,6 +25,8 @@ const db  = getDatabase(app);
 const CD_PASSWORD = 'enters';
 let myCallSign = '';
 let isCD = false;
+let isModerator = false;
+let devMode = false;
 let presKey = '';
 let myPresRef = null;
 
@@ -36,6 +38,8 @@ function loadSession() {
       if (s.callSign) {
         myCallSign = s.callSign;
         isCD = s.isCD || false;
+        isModerator = s.isModerator || false;
+        devMode = s.devMode || false;
         return true;
       }
     } catch(e) {}
@@ -44,7 +48,7 @@ function loadSession() {
 }
 
 function saveSession(callSign, cd) {
-  localStorage.setItem('warroom_session', JSON.stringify({ callSign, isCD: cd }));
+  localStorage.setItem('warroom_session', JSON.stringify({ callSign, isCD: cd, isModerator, devMode }));
 }
 
 function clearSession() {
@@ -56,7 +60,7 @@ function showLoginModal() {
   if (myPresRef) { remove(myPresRef); myPresRef = null; }
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('login-select').value = '';
-  document.getElementById('login-password-wrap').style.display = 'none';
+  document.getElementById('login-password-wrap').style.display = 'block';
   document.getElementById('login-error').style.display = 'none';
   document.getElementById('login-btn').classList.remove('cd-mode');
   document.getElementById('login-btn').textContent = '[ AUTHENTICATE ]';
@@ -65,10 +69,19 @@ window.showLoginModal = showLoginModal;
 
 function attemptLogin() {
   const sel = document.getElementById('login-select').value;
+  const pw = document.getElementById('login-password').value;
+
+  if (pw === 'dev') {
+    devMode = true;
+    isModerator = false;
+    completeLogin(sel || 'OBSERVER', false);
+    return;
+  }
+
   if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
 
-  const pw = document.getElementById('login-password').value;
-  const expected = sel === 'CD' ? CD_PASSWORD : sel.toLowerCase();
+  devMode = false;
+  const expected = sel === 'CD' ? CD_PASSWORD : sel === 'MODERATOR' ? 'watches' : sel.toLowerCase();
 
   if (pw !== expected) {
     shakeLoginError('✕ AUTHORIZATION FAILED — INCORRECT CODE');
@@ -77,6 +90,7 @@ function attemptLogin() {
     return;
   }
 
+  isModerator = (sel === 'MODERATOR');
   completeLogin(sel, sel === 'CD');
 }
 window.attemptLogin = attemptLogin;
@@ -90,30 +104,38 @@ function shakeLoginError(msg) {
 }
 
 function completeLogin(callSign, cd) {
-  myCallSign = callSign;
-  isCD = cd;
-  saveSession(callSign, cd);
+  try {
+    myCallSign = callSign;
+    isCD = cd;
+    saveSession(callSign, cd);
 
-  // Register presence
-  presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
-  myPresRef = ref(db, `presence/${presKey}`);
-  set(myPresRef, { callSign: myCallSign, isCD, ts: Date.now() });
-  onDisconnect(myPresRef).remove();
+    // Register presence (skip in dev mode)
+    if (!devMode) {
+      presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
+      myPresRef = ref(db, `presence/${presKey}`);
+      set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
+      onDisconnect(myPresRef).remove();
+    }
 
-  // Hide login
-  document.getElementById('login-overlay').classList.add('hidden');
+    // Hide login
+    document.getElementById('login-overlay').classList.add('hidden');
 
-  // Apply permissions
-  applyPermissions();
+    // Apply permissions
+    applyPermissions();
 
-  // Update UI labels
-  setCallSignLabel();
-  setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
+    // Update UI labels
+    setCallSignLabel();
+    if (!devMode) setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
+  } catch(err) {
+    console.error('completeLogin error:', err);
+    // Force hide login even if something else failed
+    document.getElementById('login-overlay').classList.add('hidden');
+  }
 }
 
 function applyPermissions() {
   const badge = document.getElementById('agent-badge');
-  if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : `⬡ ${myCallSign}`;
+  if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : devMode ? `⬡ ${myCallSign} // DEV` : `⬡ ${myCallSign}`;
   // Editor bar — only CD can add/move/delete cities
   const editorBtns = document.querySelectorAll('#btn-add, #btn-move, #btn-delete');
   editorBtns.forEach(btn => {
@@ -126,10 +148,20 @@ function applyPermissions() {
     }
   });
 
-  // Show/hide CD delete buttons on existing crisis items and log entries
-  document.querySelectorAll('.cd-delete-crisis, .cd-delete-log').forEach(el => {
-    el.style.display = isCD ? 'inline' : 'none';
+  // Show/hide CD delete buttons via body class
+  document.body.classList.toggle("cd-mode", isCD);
+  document.body.classList.toggle("mod-mode", isModerator);
+  const modBadge = document.getElementById('mod-agent-badge');
+  if (modBadge) modBadge.textContent = `⬡ ${myCallSign} // MODERATOR`;
+
+  // Dev mode — disable all write UI
+  const writeInputs = ['dp-intel-msg','dp-title','dp-loc','dp-body','city-name-input'];
+  writeInputs.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.disabled = devMode; el.style.opacity = devMode ? '0.35' : ''; }
   });
+  const dispatchBtn = document.getElementById('open-dispatch-btn');
+  if (dispatchBtn) { dispatchBtn.style.opacity = devMode ? '0.35' : ''; dispatchBtn.style.pointerEvents = devMode ? 'none' : ''; }
 
   // If not CD, ensure we're in view mode
   if (!isCD && mode !== 'view') setMode('view');
@@ -143,7 +175,7 @@ document.getElementById('login-select').addEventListener('change', function() {
   const err = document.getElementById('login-error');
   err.style.display = 'none';
   document.getElementById('login-password').value = '';
-  wrap.style.display = this.value ? 'block' : 'none';
+  wrap.style.display = 'block';
   if (this.value === 'CD') {
     label.textContent = '⚠ CD AUTHORIZATION CODE REQUIRED';
     btn.classList.add('cd-mode');
@@ -244,27 +276,19 @@ function renderAll() {
 const citiesRef=ref(db,'cities');
 onValue(citiesRef,snap=>{ cities=snap.val()||{}; renderAll(); });
 
-function fbAddCity(name,x,y,type){
+function fbAddCity(name,x,y,type){ if(devMode) return;
   const r=push(citiesRef);
   set(r,{id:r.key,name,x,y,type,addedBy:myCallSign});
 }
-function fbMoveCity(id,x,y){ update(ref(db,`cities/${id}`),{x,y}); }
-function fbDeleteCity(id){ remove(ref(db,`cities/${id}`)); }
+function fbMoveCity(id,x,y){ if(devMode) return; update(ref(db,`cities/${id}`),{x,y}); }
+function fbDeleteCity(id){ if(devMode) return; remove(ref(db,`cities/${id}`)); }
 
 // ═══════════════════════════════════════════════════════════
 // FIREBASE: CRISIS FEED
 // ═══════════════════════════════════════════════════════════
 const crisisRef=ref(db,'crises');
 
-onValue(crisisRef,snap=>{ renderCrisisFeed(snap.val()||{}); });
-
-onValue(crisisRef,snap=>{
-  if(!snap.exists()){
-    CRISES.forEach((c,i)=>{
-      set(ref(db,`crises/default_${i}`),{id:`default_${i}`,...c,postedBy:'SYSTEM',timestamp:Date.now()-(i*3600000)});
-    });
-  }
-},{onlyOnce:true});
+onValue(crisisRef,snap=>{ const data=snap.val()||{}; renderCrisisFeed(data); updateTicker(data); });
 
 function renderCrisisFeed(data){
   const feed=document.getElementById('crisis-feed');
@@ -282,7 +306,7 @@ function renderCrisisFeed(data){
         <span class="crisis-priority ${c.pri}">${c.pri}</span>
         <span class="crisis-location">${c.loc}</span>
         ${c.postedBy&&c.postedBy!=='SYSTEM'?`<span style="font-size:8px;color:rgba(0,255,65,0.4);margin-left:auto;">[${c.postedBy}]</span>`:''}
-        <button class="cd-delete-crisis" style="display:${isCD?'inline':'none'}" data-id="${c.id}" onclick="cdDeleteCrisis(event,'${c.id}')">✕ DELETE</button>
+        <button class="cd-delete-crisis" data-id="${c.id}" onclick="cdDeleteCrisis(event,'${c.id}')">✕ DELETE</button>
       </div>
       <div class="crisis-title">${c.title}</div>
       <div class="crisis-body">${(c.body||'').split('\n')[0].substring(0,120)}</div>`;
@@ -291,7 +315,15 @@ function renderCrisisFeed(data){
   });
 }
 
-function fbPushCrisis(title,loc,pri,body){
+function updateTicker(data) {
+  const el = document.getElementById('ticker-content');
+  if (!el) return;
+  const items = Object.values(data).sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+  if (!items.length) { el.textContent = '◆ AWAITING DISPATCHES ◆'; return; }
+  el.textContent = items.map(c => `◆ [${c.pri}] ${c.loc} — ${c.title}`).join(' ') + ' ◆';
+}
+
+function fbPushCrisis(title,loc,pri,body){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
   const r=push(crisisRef);
   set(r,{id:r.key,title,loc,pri,body,time:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+' GMT',clr:'OPERATIVE',postedBy:myCallSign,timestamp:Date.now()});
@@ -306,21 +338,28 @@ onValue(intelRef,snap=>{
   const logEl=document.getElementById('intel-log');
   if(!logEl) return;
   const entries=snap.val()||{};
-  const sorted=Object.entries(entries).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,25);
+  const sorted=Object.entries(entries).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,50);
   logEl.innerHTML='';
+  renderModLog(entries);
   sorted.forEach(([key,e])=>{
+    // Filter DMs — only show if public, or if we are sender or recipient
+    const isDM = !!e.recipient;
+    if(isDM && e.recipient !== myCallSign && e.callSign !== myCallSign) return;
     const div=document.createElement('div');
-    div.className='log-entry'+(e.isUser?' new':'');
-    const col=e.isUser?'var(--amber)':'rgba(0,255,65,0.38)';
+    const dmStyle = isDM ? ' dm' : '';
+    div.className='log-entry'+(e.isUser?' new':'')+dmStyle;
+    const col=isDM?'rgba(255,176,0,0.7)':e.isUser?'var(--amber)':'rgba(0,255,65,0.38)';
+    const dmTag=isDM?`<span style="font-size:7px;color:rgba(255,176,0,0.5);letter-spacing:1px;margin-right:4px;">[DM→${e.recipient}]</span>`:'';
     div.innerHTML=`<span class="timestamp" style="color:${col}">[${e.ts_str||'--:--:--'}]</span> `+
       (e.callSign?`<span style="color:${col};font-size:8px;">${e.callSign}:</span> `:'')+
+      dmTag+
       `<span class="msg">${e.msg}</span>`+
-      `<button class="cd-delete-log" style="display:${isCD?'inline':'none'}" onclick="cdDeleteLog('${key}')">✕</button>`;
+      `<button class="cd-delete-log" onclick="cdDeleteLog('${key}')">✕</button>`;
     logEl.appendChild(div);
   });
 });
 
-function fbPostLog(msg,isUser){
+function fbPostLog(msg,isUser){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
   const r=push(intelRef);
   set(r,{msg,isUser,callSign:isUser?myCallSign:null,ts:Date.now(),ts_str:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+':'+p(now.getUTCSeconds())});
@@ -331,30 +370,145 @@ function fbPostLog(msg,isUser){
   },{onlyOnce:true});
 }
 
-// Seed initial log entries
-const AUTO_LOG=['Station FOXGLOVE — contact re-established on channel DELTA-9','Cipher decode progress: 47% — cryptanalysis ongoing','Asset CRIMSON checked in — Berlin sector, status nominal','Radio silence from Node 7 — dispatching relay probe','Aerial recon confirms armored formation movement','Diplomatic pouch intercepted — contents sealed','Eastern bloc communiqué logged under SUNRAY','Committee session alpha adjourned at 03:40 GMT','Priority dispatch received from Washington','Morse relay: SUNRAY acknowledges standing by','Asset NIGHTINGALE requests extraction window','Allied fleet repositioning — North Sea, bearing 270'];
-let autoIdx=0;
+function fbPostDM(msg, recipient){ if(devMode) return;
+  const now=new Date(),p=n=>String(n).padStart(2,'0');
+  const r=push(intelRef);
+  set(r,{msg,isUser:true,callSign:myCallSign,recipient,ts:Date.now(),ts_str:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+':'+p(now.getUTCSeconds())});
+}
 
-onValue(intelRef,snap=>{
-  if(!snap.exists()){
-    AUTO_LOG.slice(0,8).forEach((msg,i)=>{
-      const t=new Date(Date.now()-(8-i)*60000),p=n=>String(n).padStart(2,'0');
-      const r=push(intelRef);
-      set(r,{msg,isUser:false,callSign:null,ts:t.getTime(),ts_str:p(t.getUTCHours())+':'+p(t.getUTCMinutes())+':'+p(t.getUTCSeconds())});
-    });
+function renderModLog(entries) {
+  const logEl = document.getElementById('mod-log');
+  if (!logEl) return;
+  const sorted = Object.entries(entries).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,100);
+  logEl.innerHTML = '';
+  if (!sorted.length) {
+    logEl.innerHTML = '<div style="color:rgba(0,255,65,0.2);font-size:9px;letter-spacing:2px;padding:20px;">NO MESSAGES YET</div>';
+    return;
   }
-},{onlyOnce:true});
-
-setInterval(()=>{ fbPostLog(AUTO_LOG[autoIdx%AUTO_LOG.length],false); autoIdx++; },7000);
+  sorted.forEach(([key,e]) => {
+    const div = document.createElement('div');
+    div.className = 'mod-log-entry' + (e.recipient ? ' dm' : '');
+    const dmTag = e.recipient ? `<span class="mod-dm-tag">[DM→${e.recipient}]</span>` : '';
+    div.innerHTML =
+      `<span class="mod-ts">[${e.ts_str||'--:--:--'}]</span>` +
+      `<span class="mod-sender">${e.callSign||'SYSTEM'}</span>` +
+      dmTag +
+      `<span class="mod-msg">${e.msg}</span>` +
+      `<button class="mod-del" onclick="cdDeleteLog('${key}')">✕ DEL</button>`;
+    logEl.appendChild(div);
+  });
+}
 
 // ═══════════════════════════════════════════════════════════
 // PRESENCE COUNTER
 // ═══════════════════════════════════════════════════════════
 onValue(ref(db,'presence'),snap=>{
-  const count=Object.keys(snap.val()||{}).length;
+  const agents=snap.val()||{};
+  const count=Object.keys(agents).length;
   const el=document.getElementById('online-indicator');
   if(el) el.textContent=`◉ ${count} AGENT${count!==1?'S':''} ONLINE`;
+  renderCDAgentList(agents);
 });
+
+function renderCDAgentList(agents) {
+  const list = document.getElementById('cd-agent-list');
+  if (!list) return;
+  const rows = Object.values(agents);
+  if (rows.length === 0) {
+    list.innerHTML = '<div id="cd-agent-empty">NO AGENTS ONLINE</div>';
+  } else {
+    list.innerHTML = '';
+    rows.forEach(a => {
+      const isSelf = a.callSign === myCallSign;
+      const row = document.createElement('div');
+      row.className = 'cd-agent-row';
+      const nameSpan = `<span class="cd-agent-name${a.isCD?' is-cd':''}">${a.callSign}${a.isCD?' ★':''}</span>`;
+      const kickBtn = isSelf
+        ? `<span style="font-size:7px;color:rgba(0,255,65,0.2);letter-spacing:1px;">YOU</span>`
+        : `<button class="cd-kick-btn" onclick="kickAgent('${a.callSign}')">KICK</button>`;
+      row.innerHTML = nameSpan + kickBtn;
+      list.appendChild(row);
+    });
+  }
+  // Update recipient dropdown
+  const sel = document.getElementById('dp-intel-recipient');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="ALL">◆ ALL AGENTS (PUBLIC)</option>';
+  Object.values(agents).forEach(a => {
+    if (a.callSign === myCallSign) return;
+    const opt = document.createElement('option');
+    opt.value = a.callSign;
+    opt.textContent = `⬡ ${a.callSign}${a.isCD?' (CD)':''}`;
+    sel.appendChild(opt);
+  });
+  if([...sel.options].some(o=>o.value===current)) sel.value=current;
+}
+
+function toggleCDPanel() {
+  const panel = document.getElementById('cd-agent-panel');
+  if (panel) panel.classList.toggle('active');
+}
+window.toggleCDPanel = toggleCDPanel;
+
+function kickAgent(callSign) {
+  if (!isCD) return;
+  // Write kick record to Firebase with expiry timestamp
+  const kickUntil = Date.now() + 20000;
+  set(ref(db, `kicks/${callSign.replace(/[^a-zA-Z0-9]/g,'_')}`), { callSign, kickUntil });
+  // Remove their presence immediately
+  remove(ref(db, `presence/${callSign.replace(/[^a-zA-Z0-9]/g,'_')}`));
+  fbPostLog(`CD issued disconnect order: ${callSign}`, false);
+}
+window.kickAgent = kickAgent;
+
+// Listen for kicks targeting this client
+onValue(ref(db,'kicks'), snap => {
+  const kicks = snap.val() || {};
+  const myKey = myCallSign.replace(/[^a-zA-Z0-9]/g,'_');
+  const kick = kicks[myKey];
+  if (kick && kick.kickUntil > Date.now()) {
+    // We've been kicked — force logout and lock login
+    if (myPresRef) { remove(myPresRef); myPresRef = null; }
+    myCallSign = '';
+    isCD = false;
+    devMode = false;
+    localStorage.removeItem('warroom_session');
+    showLoginModal();
+    lockLoginUntil(kick.kickUntil);
+  }
+});
+
+let kickLockInterval = null;
+function lockLoginUntil(until) {
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-error');
+  const sel = document.getElementById('login-select');
+  const pw  = document.getElementById('login-password');
+
+  function applyLock() {
+    const remaining = Math.ceil((until - Date.now()) / 1000);
+    if (remaining <= 0) {
+      // Unlock
+      if (btn)  { btn.disabled = false; btn.textContent = '[ AUTHENTICATE ]'; }
+      if (sel)  sel.disabled = false;
+      if (pw)   pw.disabled = false;
+      if (err)  { err.style.display = 'none'; }
+      clearInterval(kickLockInterval);
+      // Clean up kick record
+      remove(ref(db, `kicks/${myCallSign.replace(/[^a-zA-Z0-9]/g,'_')}`));
+      return;
+    }
+    if (btn)  { btn.disabled = true; btn.textContent = `[ LOCKED — ${remaining}s ]`; }
+    if (sel)  sel.disabled = true;
+    if (pw)   pw.disabled = true;
+    if (err)  { err.textContent = `✕ DISCONNECTED BY CD — RETRY IN ${remaining}s`; err.style.display = 'block'; }
+  }
+
+  applyLock();
+  clearInterval(kickLockInterval);
+  kickLockInterval = setInterval(applyLock, 500);
+}
 
 // ═══════════════════════════════════════════════════════════
 // MODE CONTROLS
@@ -506,6 +660,7 @@ const radioSfx = new Audio('radio.mp3');
 radioSfx.volume = 0.8;
 
 function openDispatchPanel(){
+  if(!isCD) return;
   radioSfx.currentTime = 0;
   radioSfx.play().catch(()=>{});
   document.getElementById('dispatch-panel').classList.add('active');
@@ -515,6 +670,7 @@ function closeDispatchPanel(){ document.getElementById('dispatch-panel').classLi
 window.closeDispatchPanel=closeDispatchPanel;
 
 function submitCrisis(){
+  if(!isCD) return;
   const title=document.getElementById('dp-title').value.trim();
   const loc=(document.getElementById('dp-loc').value.trim()||'UNKNOWN').toUpperCase();
   const pri=document.getElementById('dp-pri').value;
@@ -532,7 +688,13 @@ window.submitCrisis=submitCrisis;
 function submitIntel(){
   const msg=document.getElementById('dp-intel-msg').value.trim();
   if(!msg) return;
-  fbPostLog(msg,true);
+  const recipientEl=document.getElementById('dp-intel-recipient');
+  const recipient=recipientEl?recipientEl.value:'ALL';
+  if(recipient==='ALL'){
+    fbPostLog(msg,true);
+  } else {
+    fbPostDM(msg,recipient);
+  }
   document.getElementById('dp-intel-msg').value='';
   document.getElementById('dp-intel-msg').focus();
 }
@@ -555,12 +717,19 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('dp-intel-msg').addEventListener('keydown',e=>{
     if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitIntel();}
   });
+  document.getElementById('dp-intel-recipient').addEventListener('change',function(){
+    const hint=document.getElementById('dp-intel-hint');
+    if(!hint) return;
+    hint.textContent = this.value==='ALL'
+      ? 'Messages appear in real-time for all connected agents. Press Enter to send.'
+      : `This message will only be visible to you and ${this.value}.`;
+  });
 });
 
 // CD-only: delete crisis
 function cdDeleteCrisis(event, id) {
   event.stopPropagation();
-  if (!isCD) return;
+  if (!isCD || devMode) return;
   remove(ref(db, `crises/${id}`));
   fbPostLog(`CD removed crisis dispatch [${id}]`, false);
 }
@@ -568,20 +737,12 @@ window.cdDeleteCrisis = cdDeleteCrisis;
 
 // CD-only: delete log entry
 function cdDeleteLog(key) {
-  if (!isCD) return;
+  if ((!isCD && !isModerator) || devMode) return;
   remove(ref(db, `intelLog/${key}`));
 }
 window.cdDeleteLog = cdDeleteLog;
 
 
-const CRISES=[
-  {title:'EASTERN FLANK INCURSION — ARMORED COLUMN SIGHTED',loc:'BERLIN',pri:'HIGH',time:'04:17 GMT',clr:'OPERATIVE',body:`INTELLIGENCE REPORT — PRIORITY ALPHA\n────────────────────────────────────────\n\nStation NIGHTWATCH confirmed mechanized column of ~40 armored vehicles crossed demarcation line at NOVEMBER-7-ECHO, 03:51 GMT.\n\nCombined-arms assessment: armor, infantry, towed artillery. Material breach of Krakow Provisional Agreement.\n\nRECOMMENDED ACTION: Convene emergency session. Issue condemnation. Activate Article IV.`},
-  {title:'DIPLOMATIC CIPHER INTERCEPTED — INTENT UNCLEAR',loc:'MOSCOW',pri:'HIGH',time:'03:52 GMT',clr:'DIRECTOR',body:`SIGNALS INTELLIGENCE — COMPARTMENTALIZED\n────────────────────────────────────────\n\nStation FOXGLOVE: partial intercept 03:22 GMT, DELTA-9. Unknown cypher variant. Decode: 47%.\n\nRECOMMENDED ACTION: Elevated readiness. Full decode: 90 min.`},
-  {title:'NEUTRAL ZONE AGREEMENT UNDER STRAIN',loc:'GENEVA',pri:'MED',time:'02:30 GMT',clr:'AGENT',body:`SITUATION REPORT — DIPLOMATIC\n────────────────────────────────────────\n\n3 airspace violations in 48hr. No transponder IDs.\n\nRECOMMENDED ACTION: Emergency resolution. 72hr advance-notice requirement.`},
-  {title:'NAVAL RESUPPLY ROUTE DISPUTED — BLOCKADE IMMINENT',loc:'ISTANBUL',pri:'MED',time:'01:14 GMT',clr:'AGENT',body:`NAVAL INTELLIGENCE — URGENT\n────────────────────────────────────────\n\nSS KARPATHIA seized 00:42 GMT, lower Bosphorus. 3.2M civilians at risk.\n\nRECOMMENDED ACTION: Back-channel contact. Bosphorus Convention arbitration.`},
-  {title:'PRESS BUREAU REQUESTING OFFICIAL STATEMENT',loc:'LONDON',pri:'LOW',time:'00:05 GMT',clr:'CADET',body:`COMMUNICATIONS ADVISORY\n────────────────────────────────────────\n\n17 press inquiries. Draft ROMEO-4 recommended.\n\nRECOMMENDED ACTION: DIRECTOR clearance to authorize ROMEO-4.`},
-  {title:'RATIFICATION OF ARTICLE IX — SIGNATURES OUTSTANDING',loc:'WARSAW',pri:'LOW',time:'PREV. SESSION',clr:'CADET',body:`PROCEDURAL NOTICE — SECRETARIAT\n────────────────────────────────────────\n\n7 of 12 ratifications received. France, Netherlands, Belgium, Norway, Czechoslovakia outstanding.\n\nDeadline: morning plenary.`},
-];
 
 window.addEventListener('resize',renderAll);
 setTimeout(renderAll,100);
@@ -595,7 +756,7 @@ if (loadSession()) {
   document.getElementById('login-overlay').classList.add('hidden');
   presKey = myCallSign.replace(/[^a-zA-Z0-9]/g, '_');
   myPresRef = ref(db, `presence/${presKey}`);
-  set(myPresRef, { callSign: myCallSign, isCD, ts: Date.now() });
+  set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
   onDisconnect(myPresRef).remove();
   applyPermissions();
   setCallSignLabel();
