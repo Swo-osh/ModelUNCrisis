@@ -63,7 +63,7 @@ function showLoginModal() {
   if (myPresRef) { remove(myPresRef); myPresRef = null; }
   document.getElementById('login-overlay').classList.remove('hidden');
   document.getElementById('login-select').value = '';
-  document.getElementById('login-password-wrap').style.display = 'block';
+  document.getElementById('login-password-wrap').style.display = 'none';
   document.getElementById('login-error').style.display = 'none';
   document.getElementById('login-btn').classList.remove('cd-mode');
   document.getElementById('login-btn').textContent = '[ AUTHENTICATE ]';
@@ -82,8 +82,6 @@ function attemptLogin() {
     completeLogin(sel || 'OBSERVER', false);
     return;
   }
-
-  if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
 
   devMode = false;
   const expected = sel === 'CD' ? CD_PASSWORD : sel === 'MODERATOR' ? 'watches' : sel.toLowerCase();
@@ -114,17 +112,14 @@ function completeLogin(callSign, cd) {
     isCD = cd;
     presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
     myPresRef = ref(db, `presence/${presKey}`);
-    set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
-    onDisconnect(myPresRef).remove();
-    saveSession(callSign, cd);
 
     // Register presence (skip in dev mode)
     if (!devMode) {
-      presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
-      myPresRef = ref(db, `presence/${presKey}`);
       set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
       onDisconnect(myPresRef).remove();
     }
+
+    saveSession(callSign, cd);
 
     // Hide login
     document.getElementById('login-overlay').classList.add('hidden');
@@ -134,7 +129,6 @@ function completeLogin(callSign, cd) {
 
     // Update UI labels
     setCallSignLabel();
-    setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
     if (!devMode) setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
   } catch(err) {
     console.error('completeLogin error:', err);
@@ -145,7 +139,6 @@ function completeLogin(callSign, cd) {
 
 function applyPermissions() {
   const badge = document.getElementById('agent-badge');
-  if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : `⬡ ${myCallSign}`;
   if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : devMode ? `⬡ ${myCallSign} // DEV` : `⬡ ${myCallSign}`;
   // Editor bar — only CD can add/move/delete cities
   const editorBtns = document.querySelectorAll('#btn-add, #btn-move, #btn-delete');
