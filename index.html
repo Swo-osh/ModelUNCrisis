@@ -155,8 +155,6 @@
   .ed-btn:hover, .ed-btn.active { background:rgba(0,255,65,0.12); border-color:var(--radar-green); }
   .ed-btn.danger { border-color:rgba(255,34,0,0.4); color:var(--red-alert); }
   .ed-btn.danger:hover { background:rgba(255,34,0,0.1); border-color:var(--red-alert); }
-  .ed-btn.export-btn { border-color:rgba(0,191,255,0.5); color:#00bfff; }
-  .ed-btn.export-btn:hover { background:rgba(0,191,255,0.1); border-color:#00bfff; }
   .ed-sep { color:rgba(0,255,65,0.2); font-size:14px; }
   #mode-label { font-size:9px; letter-spacing:2px; color:var(--amber); text-shadow:0 0 6px var(--amber); }
 
@@ -383,6 +381,7 @@
   }
   body.cd-mode .cd-delete-log:hover { color:var(--red-alert); }
 
+  .log-entry.dm { border-left:2px solid rgba(153,91,255,0.5); padding-left:6px; background:rgba(153,91,255,0.04); }
   .log-entry.dm { border-left:2px solid rgba(255,176,0,0.4); padding-left:6px; background:rgba(255,176,0,0.04); }
   .cd-only-btn { display:none; }
   body.cd-mode .cd-only-btn { display:inline-block; }
@@ -396,6 +395,7 @@
     transition:all 0.2s; display:none;
   }
   #cd-panel-btn:hover { border-color:var(--amber); color:var(--amber); }
+  body.cd-mode #cd-panel-btn, body.mod-mode #cd-panel-btn { display:inline-block; }
   body.cd-mode #cd-panel-btn { display:inline-block; }
 
   #cd-agent-panel {
@@ -573,8 +573,8 @@
     <button class="ed-btn" id="btn-move" onclick="setMode('move')">[ ✥ MOVE ]</button>
     <button class="ed-btn danger" id="btn-delete" onclick="setMode('delete')">[ ✕ DELETE ]</button>
     <span class="ed-sep">|</span>
-    <button class="ed-btn export-btn" onclick="showExport()">[ EXPORT ]</button>
     <span class="ed-sep">|</span>
+    <button class="ed-btn" id="dispatch-btn" onclick="openDispatchPanel()" style="border-color:rgba(255,176,0,0.5);color:var(--amber);">[ ✉ DISPATCH ]</button>
     <button class="ed-btn cd-only-btn" onclick="openDispatchPanel()" style="border-color:rgba(255,176,0,0.5);color:var(--amber);">[ ✉ DISPATCH ]</button>
   </div>
 </div>
@@ -593,15 +593,6 @@
   </div>
 </div>
 
-<div id="export-box">
-  <h3>CITY COORDINATES EXPORT</h3>
-  <textarea id="export-out" readonly></textarea>
-  <p>Copy and paste into the final deployment HTML to lock positions permanently.</p>
-  <div style="display:flex;gap:8px;">
-    <button class="export-close" onclick="document.getElementById('export-box').classList.remove('active')">[ CLOSE ]</button>
-    <button class="export-close" onclick="copyExport()" style="border-color:rgba(0,255,65,0.4);color:var(--radar-green);">[ COPY ]</button>
-  </div>
-</div>
 
 <div id="ui-container">
   <div id="status-bar">
@@ -613,23 +604,19 @@
   </div>
 
   <div id="main-grid">
-    <div class="panel">
-      <div class="panel-header"><div class="panel-icon"></div><span class="panel-title">CLEARANCE REGISTRY</span></div>
-      <div class="badge-list">
-        <div class="badge shadow" onclick="openModal('SHADOW','★★★★★','SHADOW clearance agents have access to all compartmentalized intelligence including signals intercepts, human asset reports, and strategic planning documents. Authorized for BLACKOUT, SUNRAY, and FOXHUNT protocols. Direct line to Supreme Allied Command.')">
-          <div><div class="badge-rank">CLEARANCE RANK</div><div class="badge-name">SHADOW</div></div><div class="badge-stars">★★★★★</div>
+    <div class="panel" style="display:flex;flex-direction:column;">
+      <div class="panel-header"><div class="panel-icon" style="background:#9b59ff;box-shadow:0 0 6px #9b59ff;"></div><span class="panel-title">SECURE MESSAGE LOG</span></div>
+      <div id="msg-log" style="flex:1;padding:10px 14px;font-size:9.5px;line-height:1.9;overflow-y:auto;max-height:340px;color:var(--dim-green);"></div>
+      <div style="padding:8px 10px;border-top:1px solid rgba(0,255,65,0.1);">
+        <div style="margin-bottom:6px;">
+          <select id="msg-recipient" style="width:100%;background:#050a05;border:1px solid rgba(0,255,65,0.2);color:rgba(0,255,65,0.6);font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1px;padding:4px 6px;cursor:pointer;">
+            <option value="">— SELECT RECIPIENT —</option>
+          </select>
         </div>
-        <div class="badge director" onclick="openModal('DIRECTOR','★★★★','DIRECTOR clearance grants access to all committee documents, position papers, and operative reports. Authorized to issue crisis updates and interface directly with field assets.')">
-          <div><div class="badge-rank">CLEARANCE RANK</div><div class="badge-name">DIRECTOR</div></div><div class="badge-stars">★★★★</div>
-        </div>
-        <div class="badge operative" onclick="openModal('OPERATIVE','★★★','OPERATIVE clearance permits access to general intelligence dispatches, unclassified position summaries, and committee working papers. Field deployment authorized within designated zones.')">
-          <div><div class="badge-rank">CLEARANCE RANK</div><div class="badge-name">OPERATIVE</div></div><div class="badge-stars">★★★</div>
-        </div>
-        <div class="badge agent" onclick="openModal('AGENT','★★','AGENT clearance grants viewing access to published dispatches, committee resolutions, and briefing documents.')">
-          <div><div class="badge-rank">CLEARANCE RANK</div><div class="badge-name">AGENT</div></div><div class="badge-stars">★★</div>
-        </div>
-        <div class="badge cadet" onclick="openModal('CADET','★','CADET clearance is the entry-level designation. Access restricted to public briefings and open-source intelligence summaries.')">
-          <div><div class="badge-rank">CLEARANCE RANK</div><div class="badge-name">CADET</div></div><div class="badge-stars">★</div>
+        <div style="display:flex;gap:6px;">
+          <input id="msg-input" type="text" placeholder="TYPE MESSAGE..." autocomplete="off" maxlength="200"
+            style="flex:1;background:#050a05;border:1px solid rgba(0,255,65,0.2);color:var(--radar-green);font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;padding:5px 8px;outline:none;"/>
+          <button onclick="submitMsg()" style="background:rgba(153,91,255,0.1);border:1px solid rgba(153,91,255,0.4);color:#9b59ff;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1px;padding:5px 10px;cursor:pointer;white-space:nowrap;">SEND</button>
         </div>
       </div>
     </div>
@@ -642,6 +629,7 @@
       <div class="panel">
         <div class="panel-header"><div class="panel-icon" style="background:var(--amber);box-shadow:0 0 6px var(--amber);"></div><span class="panel-title">LIVE INTELLIGENCE LOG</span></div>
         <div id="intel-log"></div>
+
       </div>
     </div>
   </div>
@@ -710,8 +698,8 @@ textarea.dp-field { min-height:80px; resize:vertical; }
   <h3>✉ SECURE DISPATCH TERMINAL</h3>
   <div class="dp-callsign" id="dp-callsign-label">SENDING AS: LOADING...</div>
   <div class="dp-tabs">
-    <button class="dp-tab active" id="dp-tab-crisis">◉ PUSH CRISIS</button>
-    <button class="dp-tab" id="dp-tab-intel">◈ INTEL LOG MSG</button>
+    <button class="dp-tab active" id="dp-tab-crisis" onclick="switchDPTab('crisis')">◉ PUSH CRISIS</button>
+    <button class="dp-tab" id="dp-tab-intel" onclick="switchDPTab('intel')">◈ INTEL LOG MSG</button>
   </div>
   <div id="dp-crisis-form">
     <input class="dp-field" id="dp-title" type="text" placeholder="CRISIS TITLE (UPPERCASE)" autocomplete="off" maxlength="80"/>
@@ -763,6 +751,7 @@ textarea.dp-field { min-height:80px; resize:vertical; }
     <div id="mod-header-title">⬡ MODERATION CONSOLE — INTEL LOG OVERSIGHT</div>
     <div id="mod-header-right">
       <span id="mod-agent-badge"></span>
+      <button onclick="toggleCDPanel()" style="background:none;border:1px solid rgba(255,176,0,0.3);color:rgba(255,176,0,0.5);font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:2px;padding:3px 9px;cursor:pointer;">[ ⬡ AGENTS ]</button>
       <button onclick="showLoginModal()" style="background:none;border:1px solid rgba(0,255,65,0.2);color:rgba(0,255,65,0.4);font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:2px;padding:3px 9px;cursor:pointer;">⇄ SWITCH</button>
     </div>
   </div>

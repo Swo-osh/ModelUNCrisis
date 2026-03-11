@@ -26,6 +26,9 @@ const CD_PASSWORD = 'enters';
 let myCallSign = '';
 let isCD = false;
 let isModerator = false;
+let presKey = '';
+let myPresRef = null;
+
 let devMode = false;
 let presKey = '';
 let myPresRef = null;
@@ -71,6 +74,8 @@ function attemptLogin() {
   const sel = document.getElementById('login-select').value;
   const pw = document.getElementById('login-password').value;
 
+  if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
+
   if (pw === 'dev') {
     devMode = true;
     isModerator = false;
@@ -107,6 +112,10 @@ function completeLogin(callSign, cd) {
   try {
     myCallSign = callSign;
     isCD = cd;
+    presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
+    myPresRef = ref(db, `presence/${presKey}`);
+    set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
+    onDisconnect(myPresRef).remove();
     saveSession(callSign, cd);
 
     // Register presence (skip in dev mode)
@@ -125,6 +134,7 @@ function completeLogin(callSign, cd) {
 
     // Update UI labels
     setCallSignLabel();
+    setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
     if (!devMode) setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
   } catch(err) {
     console.error('completeLogin error:', err);
@@ -135,6 +145,7 @@ function completeLogin(callSign, cd) {
 
 function applyPermissions() {
   const badge = document.getElementById('agent-badge');
+  if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : `⬡ ${myCallSign}`;
   if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : devMode ? `⬡ ${myCallSign} // DEV` : `⬡ ${myCallSign}`;
   // Editor bar — only CD can add/move/delete cities
   const editorBtns = document.querySelectorAll('#btn-add, #btn-move, #btn-delete');
@@ -323,6 +334,7 @@ function updateTicker(data) {
   el.textContent = items.map(c => `◆ [${c.pri}] ${c.loc} — ${c.title}`).join(' ') + ' ◆';
 }
 
+function fbPushCrisis(title,loc,pri,body){
 function fbPushCrisis(title,loc,pri,body){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
   const r=push(crisisRef);
@@ -335,6 +347,14 @@ function fbPushCrisis(title,loc,pri,body){ if(devMode) return;
 const intelRef=ref(db,'intelLog');
 
 onValue(intelRef,snap=>{
+  const entries=snap.val()||{};
+  renderModLog(entries);
+  renderIntelLog(entries);
+  renderMsgLog(entries);
+});
+
+function renderIntelLog(entries) {
+  if(isModerator) return;
   const logEl=document.getElementById('intel-log');
   if(!logEl) return;
   const entries=snap.val()||{};
@@ -342,6 +362,7 @@ onValue(intelRef,snap=>{
   logEl.innerHTML='';
   renderModLog(entries);
   sorted.forEach(([key,e])=>{
+    if(e.recipient) return; // DMs go to message log only
     // Filter DMs — only show if public, or if we are sender or recipient
     const isDM = !!e.recipient;
     if(isDM && e.recipient !== myCallSign && e.callSign !== myCallSign) return;
@@ -357,7 +378,33 @@ onValue(intelRef,snap=>{
       `<button class="cd-delete-log" onclick="cdDeleteLog('${key}')">✕</button>`;
     logEl.appendChild(div);
   });
-});
+}
+
+function renderMsgLog(entries) {
+  const logEl=document.getElementById('msg-log');
+  if(!logEl) return;
+  const sorted=Object.entries(entries)
+    .filter(([,e])=>e.recipient)
+    .filter(([,e])=>e.recipient===myCallSign||e.callSign===myCallSign||isModerator||isCD)
+    .sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,50);
+  logEl.innerHTML='';
+  if(!sorted.length){
+    logEl.innerHTML='<div style="color:rgba(0,255,65,0.2);font-size:8px;letter-spacing:2px;padding:10px 0;">NO MESSAGES</div>';
+    return;
+  }
+  sorted.forEach(([key,e])=>{
+    const isMine = e.callSign===myCallSign;
+    const div=document.createElement('div');
+    div.className='log-entry dm';
+    const col='rgba(153,91,255,0.8)';
+    const dirTag=`<span style="font-size:7px;color:rgba(153,91,255,0.5);letter-spacing:1px;margin-right:4px;">${e.callSign}→${e.recipient}</span>`;
+    div.innerHTML=`<span class="timestamp" style="color:rgba(153,91,255,0.4)">[${e.ts_str||'--:--:--'}]</span> `+
+      dirTag+
+      `<span class="msg" style="color:${isMine?'rgba(153,91,255,0.9)':'var(--radar-green)'}">${e.msg}</span>`+
+      `<button class="cd-delete-log" onclick="cdDeleteLog('${key}')">✕</button>`;
+    logEl.appendChild(div);
+  });
+}
 
 function fbPostLog(msg,isUser){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
@@ -370,6 +417,29 @@ function fbPostLog(msg,isUser){ if(devMode) return;
   },{onlyOnce:true});
 }
 
+function submitMsg(){
+  const msg = document.getElementById('msg-input').value.trim();
+  const recipient = document.getElementById('msg-recipient').value;
+  if(!msg) return;
+  if(!recipient){ alert('SELECT A RECIPIENT'); return; }
+  fbPostDM(msg, recipient);
+  document.getElementById('msg-input').value='';
+}
+window.submitMsg = submitMsg;
+
+function fbPostDM(msg, recipient){
+  const now=new Date(),p=n=>String(n).padStart(2,'0');
+  const r=push(intelRef);
+  set(r,{msg,isUser:true,callSign:myCallSign,recipient,ts:Date.now(),ts_str:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+':'+p(now.getUTCSeconds())});
+}
+
+function renderModLog(entries) {
+  const logEl = document.getElementById('mod-log');
+  if (!logEl) return;
+  const sorted = Object.entries(entries).filter(([,e])=>!!e.recipient).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,100);
+  logEl.innerHTML = '';
+  if (!sorted.length) {
+    logEl.innerHTML = '<div style="color:rgba(0,255,65,0.2);font-size:9px;letter-spacing:2px;padding:20px;">NO PRIVATE MESSAGES YET</div>';
 function fbPostDM(msg, recipient){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
   const r=push(intelRef);
@@ -408,6 +478,89 @@ onValue(ref(db,'presence'),snap=>{
   const el=document.getElementById('online-indicator');
   if(el) el.textContent=`◉ ${count} AGENT${count!==1?'S':''} ONLINE`;
   renderCDAgentList(agents);
+});
+
+function renderCDAgentList(agents) {
+  const list = document.getElementById('cd-agent-list');
+  if (!list) return;
+  const rows = Object.values(agents);
+  if (rows.length === 0) {
+    list.innerHTML = '<div id="cd-agent-empty">NO AGENTS ONLINE</div>';
+  } else {
+    list.innerHTML = '';
+    rows.forEach(a => {
+      const isSelf = a.callSign === myCallSign;
+      const row = document.createElement('div');
+      row.className = 'cd-agent-row';
+      const nameSpan = `<span class="cd-agent-name${a.isCD?' is-cd':''}">${a.callSign}${a.isCD?' ★':''}</span>`;
+      const kickBtn = isSelf
+        ? `<span style="font-size:7px;color:rgba(0,255,65,0.2);letter-spacing:1px;">YOU</span>`
+        : `<button class="cd-kick-btn" onclick="kickAgent('${a.callSign}')">KICK</button>`;
+      row.innerHTML = nameSpan + kickBtn;
+      list.appendChild(row);
+    });
+  }
+  // Update dp-intel-recipient (CD dispatch panel) — always show all accounts
+  const dpSel = document.getElementById('dp-intel-recipient');
+  if (dpSel) {
+    const dpCurrent = dpSel.value;
+    dpSel.innerHTML = '<option value="ALL">◆ ALL DELEGATES (PUBLIC)</option>';
+    ['AGENT-1','AGENT-2','AGENT-3','AGENT-4','AGENT-5','AGENT-6','AGENT-7','AGENT-8','AGENT-9','AGENT-10','AGENT-11','AGENT-12','AGENT-13','AGENT-14','AGENT-15','AGENT-16','AGENT-17','AGENT-18','AGENT-19','AGENT-20','MODERATOR'].forEach(name => {
+      if (name === myCallSign) return;
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = `⬡ ${name}`;
+      dpSel.appendChild(opt);
+    });
+    if ([...dpSel.options].some(o=>o.value===dpCurrent)) dpSel.value = dpCurrent;
+  }
+
+  // Update msg-recipient (message log panel) — online agents only, no ALL
+  const msgSel = document.getElementById('msg-recipient');
+  if (msgSel) {
+    msgSel.innerHTML = '<option value="">— SELECT RECIPIENT —</option>';
+    Object.values(agents).forEach(a => {
+      if (a.callSign === myCallSign) return;
+      const opt = document.createElement('option');
+      opt.value = a.callSign;
+      opt.textContent = `⬡ ${a.callSign}${a.isCD?' (CD)':a.isModerator?' (MOD)':''}`;
+      msgSel.appendChild(opt);
+    });
+  }
+}
+
+function toggleCDPanel() {
+  const panel = document.getElementById('cd-agent-panel');
+  if (panel) panel.classList.toggle('active');
+}
+window.toggleCDPanel = toggleCDPanel;
+
+function kickAgent(callSign) {
+  if (!isCD && !isModerator) return;
+  // Write kick record to Firebase with expiry timestamp
+  const kickUntil = Date.now() + 20000;
+  set(ref(db, `kicks/${callSign.replace(/[^a-zA-Z0-9]/g,'_')}`), { callSign, kickUntil });
+  // Remove their presence immediately
+  remove(ref(db, `presence/${callSign.replace(/[^a-zA-Z0-9]/g,'_')}`));
+  fbPostLog(`CD issued disconnect order: ${callSign}`, false);
+}
+window.kickAgent = kickAgent;
+
+// Listen for kicks targeting this client
+onValue(ref(db,'kicks'), snap => {
+  const kicks = snap.val() || {};
+  const myKey = myCallSign.replace(/[^a-zA-Z0-9]/g,'_');
+  const kick = kicks[myKey];
+  if (kick && kick.kickUntil > Date.now()) {
+    // We've been kicked — force logout and lock login
+    if (myPresRef) { remove(myPresRef); myPresRef = null; }
+    myCallSign = '';
+    isCD = false;
+      showLoginModal();
+    lockLoginUntil(kick.kickUntil);
+  }
+});
+
 });
 
 function renderCDAgentList(agents) {
@@ -664,9 +817,46 @@ function openDispatchPanel(){
   radioSfx.currentTime = 0;
   radioSfx.play().catch(()=>{});
   document.getElementById('dispatch-panel').classList.add('active');
+  if(isCD) {
+    // CD sees crisis form by default
+    switchDPTab('crisis');
+  } else {
+    // Agents skip straight to intel tab, crisis tab hidden
+    switchDPTab('intel');
+    document.getElementById('dp-tab-crisis').style.display = 'none';
+    // Remove ALL option for agents — must pick a specific recipient
+    const sel = document.getElementById('dp-intel-recipient');
+    if(sel) {
+      [...sel.options].forEach(o => { if(o.value==='ALL') o.style.display='none'; });
+      if(sel.value==='ALL') sel.value = sel.options[1]?.value || 'ALL';
+    }
+    const hint = document.getElementById('dp-intel-hint');
+    if(hint) hint.textContent = 'Select a recipient — only they will see this message.';
+  }
 }
 window.openDispatchPanel=openDispatchPanel;
-function closeDispatchPanel(){ document.getElementById('dispatch-panel').classList.remove('active'); }
+
+function switchDPTab(tab){
+  const crisisForm=document.getElementById('dp-crisis-form');
+  const intelForm=document.getElementById('dp-intel-form');
+  const tabCrisis=document.getElementById('dp-tab-crisis');
+  const tabIntel=document.getElementById('dp-tab-intel');
+  if(tab==='crisis'){
+    crisisForm.style.display=''; intelForm.style.display='none';
+    tabCrisis.classList.add('active'); tabIntel.classList.remove('active');
+  } else {
+    crisisForm.style.display='none'; intelForm.style.display='';
+    tabIntel.classList.add('active'); tabCrisis.classList.remove('active');
+  }
+}
+window.switchDPTab=switchDPTab;
+function closeDispatchPanel(){
+  document.getElementById('dispatch-panel').classList.remove('active');
+  // Reset for next open
+  document.getElementById('dp-tab-crisis').style.display = '';
+  const sel = document.getElementById('dp-intel-recipient');
+  if(sel) [...sel.options].forEach(o => { o.style.display=''; });
+}
 window.closeDispatchPanel=closeDispatchPanel;
 
 function submitCrisis(){
@@ -717,10 +907,16 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('dp-intel-msg').addEventListener('keydown',e=>{
     if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitIntel();}
   });
+  const msgInput = document.getElementById('msg-input');
+  if(msgInput) msgInput.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitMsg();}
+  });
   document.getElementById('dp-intel-recipient').addEventListener('change',function(){
     const hint=document.getElementById('dp-intel-hint');
     if(!hint) return;
     hint.textContent = this.value==='ALL'
+      ? '◆ PUBLIC — visible to all agents in the intel log.'
+      : `⬡ PRIVATE — only you and ${this.value} will see this.`;
       ? 'Messages appear in real-time for all connected agents. Press Enter to send.'
       : `This message will only be visible to you and ${this.value}.`;
   });
@@ -729,6 +925,8 @@ document.addEventListener('DOMContentLoaded',()=>{
 // CD-only: delete crisis
 function cdDeleteCrisis(event, id) {
   event.stopPropagation();
+  if (!isCD) return;
+  remove(ref(db, `crises/${id}`))
   if (!isCD || devMode) return;
   remove(ref(db, `crises/${id}`));
   fbPostLog(`CD removed crisis dispatch [${id}]`, false);
@@ -737,6 +935,7 @@ window.cdDeleteCrisis = cdDeleteCrisis;
 
 // CD-only: delete log entry
 function cdDeleteLog(key) {
+  if (!isCD && !isModerator) return;
   if ((!isCD && !isModerator) || devMode) return;
   remove(ref(db, `intelLog/${key}`));
 }
@@ -751,6 +950,7 @@ setTimeout(renderAll,700);
 // ═══════════════════════════════════════════════════════════
 // BOOT — check saved session or show login
 // ═══════════════════════════════════════════════════════════
+// Login overlay is visible by default — always prompt on load
 if (loadSession()) {
   // Restore session
   document.getElementById('login-overlay').classList.add('hidden');
