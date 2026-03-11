@@ -382,6 +382,7 @@
   body.cd-mode .cd-delete-log:hover { color:var(--red-alert); }
 
   .log-entry.dm { border-left:2px solid rgba(153,91,255,0.5); padding-left:6px; background:rgba(153,91,255,0.04); }
+  .log-entry.dm { border-left:2px solid rgba(255,176,0,0.4); padding-left:6px; background:rgba(255,176,0,0.04); }
   .cd-only-btn { display:none; }
   body.cd-mode .cd-only-btn { display:inline-block; }
 
@@ -395,6 +396,7 @@
   }
   #cd-panel-btn:hover { border-color:var(--amber); color:var(--amber); }
   body.cd-mode #cd-panel-btn, body.mod-mode #cd-panel-btn { display:inline-block; }
+  body.cd-mode #cd-panel-btn { display:inline-block; }
 
   #cd-agent-panel {
     display:none; position:fixed; bottom:46px; left:130px; z-index:600;
@@ -573,6 +575,7 @@
     <span class="ed-sep">|</span>
     <span class="ed-sep">|</span>
     <button class="ed-btn" id="dispatch-btn" onclick="openDispatchPanel()" style="border-color:rgba(255,176,0,0.5);color:var(--amber);">[ ✉ DISPATCH ]</button>
+    <button class="ed-btn cd-only-btn" onclick="openDispatchPanel()" style="border-color:rgba(255,176,0,0.5);color:var(--amber);">[ ✉ DISPATCH ]</button>
   </div>
 </div>
 

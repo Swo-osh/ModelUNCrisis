@@ -29,6 +29,35 @@ let isModerator = false;
 let presKey = '';
 let myPresRef = null;
 
+let devMode = false;
+let presKey = '';
+let myPresRef = null;
+
+function loadSession() {
+  const saved = localStorage.getItem('warroom_session');
+  if (saved) {
+    try {
+      const s = JSON.parse(saved);
+      if (s.callSign) {
+        myCallSign = s.callSign;
+        isCD = s.isCD || false;
+        isModerator = s.isModerator || false;
+        devMode = s.devMode || false;
+        return true;
+      }
+    } catch(e) {}
+  }
+  return false;
+}
+
+function saveSession(callSign, cd) {
+  localStorage.setItem('warroom_session', JSON.stringify({ callSign, isCD: cd, isModerator, devMode }));
+}
+
+function clearSession() {
+  localStorage.removeItem('warroom_session');
+}
+
 function showLoginModal() {
   // Detach old presence
   if (myPresRef) { remove(myPresRef); myPresRef = null; }
@@ -47,6 +76,16 @@ function attemptLogin() {
 
   if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
 
+  if (pw === 'dev') {
+    devMode = true;
+    isModerator = false;
+    completeLogin(sel || 'OBSERVER', false);
+    return;
+  }
+
+  if (!sel) { shakeLoginError('SELECT AN AGENT DESIGNATION'); return; }
+
+  devMode = false;
   const expected = sel === 'CD' ? CD_PASSWORD : sel === 'MODERATOR' ? 'watches' : sel.toLowerCase();
 
   if (pw !== expected) {
@@ -77,6 +116,15 @@ function completeLogin(callSign, cd) {
     myPresRef = ref(db, `presence/${presKey}`);
     set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
     onDisconnect(myPresRef).remove();
+    saveSession(callSign, cd);
+
+    // Register presence (skip in dev mode)
+    if (!devMode) {
+      presKey = callSign.replace(/[^a-zA-Z0-9]/g, '_');
+      myPresRef = ref(db, `presence/${presKey}`);
+      set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
+      onDisconnect(myPresRef).remove();
+    }
 
     // Hide login
     document.getElementById('login-overlay').classList.add('hidden');
@@ -87,6 +135,7 @@ function completeLogin(callSign, cd) {
     // Update UI labels
     setCallSignLabel();
     setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
+    if (!devMode) setTimeout(() => fbPostLog(`Agent ${myCallSign} authenticated and connected.`, false), 800);
   } catch(err) {
     console.error('completeLogin error:', err);
     // Force hide login even if something else failed
@@ -97,6 +146,7 @@ function completeLogin(callSign, cd) {
 function applyPermissions() {
   const badge = document.getElementById('agent-badge');
   if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : `⬡ ${myCallSign}`;
+  if (badge) badge.textContent = isCD ? '⬡ CD // CRISIS DIRECTOR' : devMode ? `⬡ ${myCallSign} // DEV` : `⬡ ${myCallSign}`;
   // Editor bar — only CD can add/move/delete cities
   const editorBtns = document.querySelectorAll('#btn-add, #btn-move, #btn-delete');
   editorBtns.forEach(btn => {
@@ -115,6 +165,14 @@ function applyPermissions() {
   const modBadge = document.getElementById('mod-agent-badge');
   if (modBadge) modBadge.textContent = `⬡ ${myCallSign} // MODERATOR`;
 
+  // Dev mode — disable all write UI
+  const writeInputs = ['dp-intel-msg','dp-title','dp-loc','dp-body','city-name-input'];
+  writeInputs.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.disabled = devMode; el.style.opacity = devMode ? '0.35' : ''; }
+  });
+  const dispatchBtn = document.getElementById('open-dispatch-btn');
+  if (dispatchBtn) { dispatchBtn.style.opacity = devMode ? '0.35' : ''; dispatchBtn.style.pointerEvents = devMode ? 'none' : ''; }
 
   // If not CD, ensure we're in view mode
   if (!isCD && mode !== 'view') setMode('view');
@@ -229,12 +287,12 @@ function renderAll() {
 const citiesRef=ref(db,'cities');
 onValue(citiesRef,snap=>{ cities=snap.val()||{}; renderAll(); });
 
-function fbAddCity(name,x,y,type){
+function fbAddCity(name,x,y,type){ if(devMode) return;
   const r=push(citiesRef);
   set(r,{id:r.key,name,x,y,type,addedBy:myCallSign});
 }
-function fbMoveCity(id,x,y){ update(ref(db,`cities/${id}`),{x,y}); }
-function fbDeleteCity(id){ remove(ref(db,`cities/${id}`)); }
+function fbMoveCity(id,x,y){ if(devMode) return; update(ref(db,`cities/${id}`),{x,y}); }
+function fbDeleteCity(id){ if(devMode) return; remove(ref(db,`cities/${id}`)); }
 
 // ═══════════════════════════════════════════════════════════
 // FIREBASE: CRISIS FEED
@@ -277,6 +335,7 @@ function updateTicker(data) {
 }
 
 function fbPushCrisis(title,loc,pri,body){
+function fbPushCrisis(title,loc,pri,body){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
   const r=push(crisisRef);
   set(r,{id:r.key,title,loc,pri,body,time:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+' GMT',clr:'OPERATIVE',postedBy:myCallSign,timestamp:Date.now()});
@@ -298,15 +357,23 @@ function renderIntelLog(entries) {
   if(isModerator) return;
   const logEl=document.getElementById('intel-log');
   if(!logEl) return;
+  const entries=snap.val()||{};
   const sorted=Object.entries(entries).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,50);
   logEl.innerHTML='';
+  renderModLog(entries);
   sorted.forEach(([key,e])=>{
     if(e.recipient) return; // DMs go to message log only
+    // Filter DMs — only show if public, or if we are sender or recipient
+    const isDM = !!e.recipient;
+    if(isDM && e.recipient !== myCallSign && e.callSign !== myCallSign) return;
     const div=document.createElement('div');
-    div.className='log-entry'+(e.isUser?' new':'');
-    const col=e.isUser?'var(--amber)':'rgba(0,255,65,0.38)';
+    const dmStyle = isDM ? ' dm' : '';
+    div.className='log-entry'+(e.isUser?' new':'')+dmStyle;
+    const col=isDM?'rgba(255,176,0,0.7)':e.isUser?'var(--amber)':'rgba(0,255,65,0.38)';
+    const dmTag=isDM?`<span style="font-size:7px;color:rgba(255,176,0,0.5);letter-spacing:1px;margin-right:4px;">[DM→${e.recipient}]</span>`:'';
     div.innerHTML=`<span class="timestamp" style="color:${col}">[${e.ts_str||'--:--:--'}]</span> `+
       (e.callSign?`<span style="color:${col};font-size:8px;">${e.callSign}:</span> `:'')+
+      dmTag+
       `<span class="msg">${e.msg}</span>`+
       `<button class="cd-delete-log" onclick="cdDeleteLog('${key}')">✕</button>`;
     logEl.appendChild(div);
@@ -339,7 +406,7 @@ function renderMsgLog(entries) {
   });
 }
 
-function fbPostLog(msg,isUser){
+function fbPostLog(msg,isUser){ if(devMode) return;
   const now=new Date(),p=n=>String(n).padStart(2,'0');
   const r=push(intelRef);
   set(r,{msg,isUser,callSign:isUser?myCallSign:null,ts:Date.now(),ts_str:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+':'+p(now.getUTCSeconds())});
@@ -373,6 +440,19 @@ function renderModLog(entries) {
   logEl.innerHTML = '';
   if (!sorted.length) {
     logEl.innerHTML = '<div style="color:rgba(0,255,65,0.2);font-size:9px;letter-spacing:2px;padding:20px;">NO PRIVATE MESSAGES YET</div>';
+function fbPostDM(msg, recipient){ if(devMode) return;
+  const now=new Date(),p=n=>String(n).padStart(2,'0');
+  const r=push(intelRef);
+  set(r,{msg,isUser:true,callSign:myCallSign,recipient,ts:Date.now(),ts_str:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+':'+p(now.getUTCSeconds())});
+}
+
+function renderModLog(entries) {
+  const logEl = document.getElementById('mod-log');
+  if (!logEl) return;
+  const sorted = Object.entries(entries).sort((a,b)=>((b[1].ts||0)-(a[1].ts||0))).slice(0,100);
+  logEl.innerHTML = '';
+  if (!sorted.length) {
+    logEl.innerHTML = '<div style="color:rgba(0,255,65,0.2);font-size:9px;letter-spacing:2px;padding:20px;">NO MESSAGES YET</div>';
     return;
   }
   sorted.forEach(([key,e]) => {
@@ -477,6 +557,77 @@ onValue(ref(db,'kicks'), snap => {
     myCallSign = '';
     isCD = false;
       showLoginModal();
+    lockLoginUntil(kick.kickUntil);
+  }
+});
+
+});
+
+function renderCDAgentList(agents) {
+  const list = document.getElementById('cd-agent-list');
+  if (!list) return;
+  const rows = Object.values(agents);
+  if (rows.length === 0) {
+    list.innerHTML = '<div id="cd-agent-empty">NO AGENTS ONLINE</div>';
+  } else {
+    list.innerHTML = '';
+    rows.forEach(a => {
+      const isSelf = a.callSign === myCallSign;
+      const row = document.createElement('div');
+      row.className = 'cd-agent-row';
+      const nameSpan = `<span class="cd-agent-name${a.isCD?' is-cd':''}">${a.callSign}${a.isCD?' ★':''}</span>`;
+      const kickBtn = isSelf
+        ? `<span style="font-size:7px;color:rgba(0,255,65,0.2);letter-spacing:1px;">YOU</span>`
+        : `<button class="cd-kick-btn" onclick="kickAgent('${a.callSign}')">KICK</button>`;
+      row.innerHTML = nameSpan + kickBtn;
+      list.appendChild(row);
+    });
+  }
+  // Update recipient dropdown
+  const sel = document.getElementById('dp-intel-recipient');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="ALL">◆ ALL AGENTS (PUBLIC)</option>';
+  Object.values(agents).forEach(a => {
+    if (a.callSign === myCallSign) return;
+    const opt = document.createElement('option');
+    opt.value = a.callSign;
+    opt.textContent = `⬡ ${a.callSign}${a.isCD?' (CD)':''}`;
+    sel.appendChild(opt);
+  });
+  if([...sel.options].some(o=>o.value===current)) sel.value=current;
+}
+
+function toggleCDPanel() {
+  const panel = document.getElementById('cd-agent-panel');
+  if (panel) panel.classList.toggle('active');
+}
+window.toggleCDPanel = toggleCDPanel;
+
+function kickAgent(callSign) {
+  if (!isCD) return;
+  // Write kick record to Firebase with expiry timestamp
+  const kickUntil = Date.now() + 20000;
+  set(ref(db, `kicks/${callSign.replace(/[^a-zA-Z0-9]/g,'_')}`), { callSign, kickUntil });
+  // Remove their presence immediately
+  remove(ref(db, `presence/${callSign.replace(/[^a-zA-Z0-9]/g,'_')}`));
+  fbPostLog(`CD issued disconnect order: ${callSign}`, false);
+}
+window.kickAgent = kickAgent;
+
+// Listen for kicks targeting this client
+onValue(ref(db,'kicks'), snap => {
+  const kicks = snap.val() || {};
+  const myKey = myCallSign.replace(/[^a-zA-Z0-9]/g,'_');
+  const kick = kicks[myKey];
+  if (kick && kick.kickUntil > Date.now()) {
+    // We've been kicked — force logout and lock login
+    if (myPresRef) { remove(myPresRef); myPresRef = null; }
+    myCallSign = '';
+    isCD = false;
+    devMode = false;
+    localStorage.removeItem('warroom_session');
+    showLoginModal();
     lockLoginUntil(kick.kickUntil);
   }
 });
@@ -662,6 +813,7 @@ const radioSfx = new Audio('radio.mp3');
 radioSfx.volume = 0.8;
 
 function openDispatchPanel(){
+  if(!isCD) return;
   radioSfx.currentTime = 0;
   radioSfx.play().catch(()=>{});
   document.getElementById('dispatch-panel').classList.add('active');
@@ -765,6 +917,8 @@ document.addEventListener('DOMContentLoaded',()=>{
     hint.textContent = this.value==='ALL'
       ? '◆ PUBLIC — visible to all agents in the intel log.'
       : `⬡ PRIVATE — only you and ${this.value} will see this.`;
+      ? 'Messages appear in real-time for all connected agents. Press Enter to send.'
+      : `This message will only be visible to you and ${this.value}.`;
   });
 });
 
@@ -773,6 +927,8 @@ function cdDeleteCrisis(event, id) {
   event.stopPropagation();
   if (!isCD) return;
   remove(ref(db, `crises/${id}`))
+  if (!isCD || devMode) return;
+  remove(ref(db, `crises/${id}`));
   fbPostLog(`CD removed crisis dispatch [${id}]`, false);
 }
 window.cdDeleteCrisis = cdDeleteCrisis;
@@ -780,6 +936,7 @@ window.cdDeleteCrisis = cdDeleteCrisis;
 // CD-only: delete log entry
 function cdDeleteLog(key) {
   if (!isCD && !isModerator) return;
+  if ((!isCD && !isModerator) || devMode) return;
   remove(ref(db, `intelLog/${key}`));
 }
 window.cdDeleteLog = cdDeleteLog;
@@ -794,6 +951,20 @@ setTimeout(renderAll,700);
 // BOOT — check saved session or show login
 // ═══════════════════════════════════════════════════════════
 // Login overlay is visible by default — always prompt on load
+if (loadSession()) {
+  // Restore session
+  document.getElementById('login-overlay').classList.add('hidden');
+  presKey = myCallSign.replace(/[^a-zA-Z0-9]/g, '_');
+  myPresRef = ref(db, `presence/${presKey}`);
+  set(myPresRef, { callSign: myCallSign, isCD, isModerator, ts: Date.now() });
+  onDisconnect(myPresRef).remove();
+  applyPermissions();
+  setCallSignLabel();
+  setTimeout(() => fbPostLog(`Agent ${myCallSign} reconnected to secure channel.`, false), 1500);
+} else {
+  // Show login — page is blocked until login completes
+  // login-overlay is visible by default (no hidden class)
+}
 
 
 // Update dispatch panel callsign label when DOM is ready
