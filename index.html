@@ -33,12 +33,6 @@
     pointer-events:none; z-index:9999;
   }
 
-  body::after {
-    content:''; position:fixed; inset:0;
-    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.88) 100%);
-    pointer-events:none; z-index:9998;
-  }
-
   /* ===== MAP ===== */
   #map-container {
     position: relative;
@@ -588,6 +582,7 @@
   <div id="map-grid"></div>
   <div id="map-halftone"></div>
   <div id="radar-scanline"></div>
+  <div id="vignette"></div>
 
   <svg id="city-layer" xmlns="http://www.w3.org/2000/svg">
     <defs>
@@ -618,15 +613,14 @@
   </div>
 
   <div id="editor-bar">
-    <span id="mode-label">MODE: VIEW</span>
+
     <span class="ed-sep">|</span>
     <button class="ed-btn" id="btn-add" onclick="setMode('add')">[ + ADD ]</button>
     <button class="ed-btn" id="btn-move" onclick="setMode('move')">[ ✥ MOVE ]</button>
     <button class="ed-btn danger" id="btn-delete" onclick="setMode('delete')">[ ✕ DELETE ]</button>
     <span class="ed-sep">|</span>
     <span class="ed-sep">|</span>
-    <button class="ed-btn" id="dispatch-btn" onclick="openDispatchPanel()" style="border-color:rgba(255,176,0,0.5);color:var(--amber);">[ ✉ DISPATCH ]</button>
-    <button class="ed-btn cd-only-btn" onclick="openDispatchPanel()" style="border-color:rgba(255,176,0,0.5);color:var(--amber);">[ ✉ DISPATCH ]</button>
+    <button class="ed-btn cd-only-btn" onclick="resetAllChats()" style="border-color:rgba(255,34,0,0.5);color:var(--red-alert);" title="Wipe all intel log entries (public + DMs)">[ ✕ RESET CHATS ]</button>
   </div>
 </div>
 
@@ -825,5 +819,31 @@ textarea.dp-field { min-height:80px; resize:vertical; }
   </div>
   <div id="mod-log"></div>
 </div>
+<div id="spotlight" style="
+  position:fixed; inset:0; pointer-events:none; z-index:9999;
+  transition: opacity 0.3s;
+"></div>
+
+<script>
+  const spotlight = document.getElementById('spotlight');
+  let mouseX = -999, mouseY = -999;
+
+  document.addEventListener('mousemove', e => {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    spotlight.style.background =
+      `radial-gradient(circle 180px at ${mouseX}px ${mouseY}px,
+        rgba(255,255,255,0.07) 0%,
+        rgba(255,255,255,0.03) 40%,
+        transparent 70%)`;
+  });
+
+  document.addEventListener('mouseleave', () => {
+    spotlight.style.opacity = '0';
+  });
+  document.addEventListener('mouseenter', () => {
+    spotlight.style.opacity = '1';
+  });
+</script>
 </body>
 </html>

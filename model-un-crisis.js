@@ -517,6 +517,15 @@ function fbPostDM(msg, recipient){
   set(r,{msg,isUser:true,callSign:myCallSign,recipient,ts:Date.now(),ts_str:p(now.getUTCHours())+':'+p(now.getUTCMinutes())+':'+p(now.getUTCSeconds())});
 }
 
+function resetAllChats() {
+  if (!isCD) return;
+  if (!confirm('WIPE ALL INTEL LOG DATA?\n\nThis will permanently delete all public announcements and private transmissions from the database. This cannot be undone.')) return;
+  remove(intelRef).then(() => {
+    fbPostLog('CD purged all communications. Chat log reset.', false);
+  });
+}
+window.resetAllChats = resetAllChats;
+
 function renderModLog(entries) {
   const logEl = document.getElementById('mod-log');
   if (!logEl) return;
